@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use async_openai::{Client, config::OpenAIConfig};
 use dotenv::dotenv;
 use std::env;
+use std::io::{self, Write};
 
 struct Config {
     api_key: String,
@@ -54,7 +55,20 @@ fn print_welcome_message(model: &str) {
     println!("- Type your message and press Enter to send");
     println!("- Type '/exit' to end the conversation");
     println!("========================================\n");
-    println!("Chat is ready! Type your message:");
+}
+
+/// Read a line of user input with a custom prompt
+fn read_input(prompt: &str) -> Result<String> {
+    // Print the prompt and flush to ensure it appears before waiting for input
+    print!("{}", prompt);
+    io::stdout().flush().context("Failed to flush stdout")?;
+    
+    // Read the input line
+    let mut input = String::new();
+    io::stdin().read_line(&mut input).context("Failed to read input")?;
+    
+    // Trim whitespace and return
+    Ok(input.trim().to_string())
 }
 
 #[tokio::main]
@@ -68,6 +82,28 @@ async fn main() -> Result<()> {
     
     // Display welcome message
     print_welcome_message(&config.model);
+    
+    // Main interaction loop
+    loop {
+        // Get user input with a prompt
+        let user_input = read_input("You> ")?;
+        
+        // Check for exit command
+        if user_input.to_lowercase() == "/exit" {
+            println!("Exiting chat. Goodbye!");
+            break;
+        }
+        
+        // Skip empty messages
+        if user_input.trim().is_empty() {
+            continue;
+        }
+        
+        // Process the user input (for now, just echo it back)
+        println!("AI> You said: {}", user_input);
+        
+        // In the future, we'll send this to the OpenAI API and display the response
+    }
     
     Ok(())
 }
