@@ -8,6 +8,7 @@ use async_openai::{
         Role,
         ChatCompletionRequestSystemMessageArgs,
         ChatCompletionRequestUserMessageArgs,
+        ChatCompletionRequestAssistantMessageArgs,
     }
 };
 use dotenv::dotenv;
@@ -100,6 +101,15 @@ fn create_user_message(content: &str) -> Result<ChatCompletionRequestMessage> {
     Ok(user_message.into())
 }
 
+/// Create an assistant message
+fn create_assistant_message(content: &str) -> Result<ChatCompletionRequestMessage> {
+    let assistant_message = ChatCompletionRequestAssistantMessageArgs::default()
+        .content(content)
+        .build()?;
+    
+    Ok(assistant_message.into())
+}
+
 /// Send a message to the API and stream the response
 async fn send_message_streaming(
     client: &Client<OpenAIConfig>,
@@ -187,12 +197,8 @@ async fn main() -> Result<()> {
         match send_message_streaming(&client, &config.model, &messages).await {
             Ok(response) => {
                 // Add the assistant's response to conversation history
-                let assistant_message = ChatCompletionRequestUserMessageArgs::default()
-                    .role(Role::Assistant)
-                    .content(response)
-                    .build()?;
-                
-                messages.push(assistant_message.into());
+                let assistant_message = create_assistant_message(&response)?;
+                messages.push(assistant_message);
             }
             Err(e) => {
                 eprintln!("Error: {}", e);
