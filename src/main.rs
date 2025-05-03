@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use async_openai::{Client, config::OpenAIConfig};
 use dotenv::dotenv;
 use std::env;
 
@@ -33,18 +34,40 @@ impl Config {
     }
 }
 
+fn create_openai_client(config: &Config) -> Client<OpenAIConfig> {
+    // Configure the client with the API key and base URL
+    let openai_config = OpenAIConfig::new()
+        .with_api_key(&config.api_key)
+        .with_api_base(&config.base_url);
+    
+    // Create a new client with the configuration
+    Client::with_config(openai_config)
+}
+
+fn print_welcome_message(model: &str) {
+    println!("\n========================================");
+    println!("🤖 Welcome to CLI Chat!");
+    println!("========================================");
+    println!("Connected to OpenAI API successfully.");
+    println!("Using model: {}", model);
+    println!("\nHow to use:");
+    println!("- Type your message and press Enter to send");
+    println!("- Type '/exit' to end the conversation");
+    println!("========================================\n");
+    println!("Chat is ready! Type your message:");
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("Welcome to CLI Chat!");
-    println!("A simple command-line chat application.");
-    
     // Load configuration from environment variables
     let config = Config::from_env()
         .context("Failed to load configuration")?;
     
-    println!("Configuration loaded successfully.");
-    println!("Using model: {}", config.model);
-    println!("Type your messages after setup is complete.");
+    // Create the OpenAI client
+    let client = create_openai_client(&config);
+    
+    // Display welcome message
+    print_welcome_message(&config.model);
     
     Ok(())
 }
