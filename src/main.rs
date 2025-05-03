@@ -1,20 +1,16 @@
 use anyhow::{Context, Result};
 use async_openai::{
-    Client, 
-    config::OpenAIConfig,
     types::{
-        ChatCompletionRequestMessage, 
-        CreateChatCompletionRequestArgs,
-        Role,
-        ChatCompletionRequestSystemMessageArgs,
-        ChatCompletionRequestUserMessageArgs,
-        ChatCompletionRequestAssistantMessageArgs,
-    }
+        ChatCompletionRequestMessage, ChatCompletionRequestSystemMessageArgs,
+        ChatCompletionRequestUserMessageArgs, ChatCompletionRequestAssistantMessageArgs,
+        CreateChatCompletionRequestArgs, Role,
+    },
+    Client, config::OpenAIConfig,
 };
 use dotenv::dotenv;
-use futures::StreamExt;
 use std::env;
 use std::io::{self, Write};
+use futures::StreamExt;
 
 struct Config {
     api_key: String,
@@ -83,81 +79,6 @@ fn read_input(prompt: &str) -> Result<String> {
     Ok(input.trim().to_string())
 }
 
-/// Create a system message to initialize the conversation
-fn create_system_message() -> Result<ChatCompletionRequestMessage> {
-    let system_message = ChatCompletionRequestSystemMessageArgs::default()
-        .content("You are a helpful, friendly assistant. Provide clear and concise responses to help the user.")
-        .build()?;
-    
-    Ok(system_message.into())
-}
-
-/// Create a user message from input text
-fn create_user_message(content: &str) -> Result<ChatCompletionRequestMessage> {
-    let user_message = ChatCompletionRequestUserMessageArgs::default()
-        .content(content)
-        .build()?;
-    
-    Ok(user_message.into())
-}
-
-/// Create an assistant message
-fn create_assistant_message(content: &str) -> Result<ChatCompletionRequestMessage> {
-    let assistant_message = ChatCompletionRequestAssistantMessageArgs::default()
-        .content(content)
-        .build()?;
-    
-    Ok(assistant_message.into())
-}
-
-/// Send a message to the API and stream the response
-async fn send_message_streaming(
-    client: &Client<OpenAIConfig>,
-    model: &str,
-    messages: &[ChatCompletionRequestMessage],
-) -> Result<String> {
-    // Create the API request with streaming enabled
-    let request = CreateChatCompletionRequestArgs::default()
-        .model(model)
-        .messages(messages.to_vec())
-        .stream(true)
-        .build()?;
-    
-    // Send the request and get a stream of responses
-    let mut stream = client.chat().create_stream(request).await?;
-    
-    print!("AI> ");
-    io::stdout().flush().context("Failed to flush stdout")?;
-    
-    let mut full_response = String::new();
-    
-    // Process each chunk as it arrives
-    while let Some(result) = stream.next().await {
-        match result {
-            Ok(response) => {
-                // Extract content from the response delta
-                if let Some(delta) = response.choices.first() {
-                    if let Some(content) = &delta.delta.content {
-                        // Print the content fragment immediately
-                        print!("{}", content);
-                        io::stdout().flush().context("Failed to flush stdout")?;
-                        
-                        // Collect the complete response
-                        full_response.push_str(content);
-                    }
-                }
-            }
-            Err(e) => {
-                return Err(anyhow::anyhow!("Error receiving response: {}", e));
-            }
-        }
-    }
-    
-    println!(); // End the line after the complete response
-    
-    Ok(full_response)
-}
-
 #[tokio::main]
 async fn main() -> Result<()> {
     // Load configuration from environment variables
@@ -171,7 +92,12 @@ async fn main() -> Result<()> {
     print_welcome_message(&config.model);
     
     // Initialize conversation history with a system message
-    let mut messages = vec![create_system_message()?];
+    let mut conversation_history: Vec<ChatCompletionRequestMessage> = vec![
+        ChatCompletionRequestSystemMessageArgs::default()
+            .content("You are a helpful, friendly, and concise assistant. Provide accurate and thoughtful responses.")
+            .build()?
+            .into(),
+    ];
     
     // Main interaction loop
     loop {
@@ -189,20 +115,60 @@ async fn main() -> Result<()> {
             continue;
         }
         
-        // Create a message from user input and add to history
-        let user_message = create_user_message(&user_input)?;
-        messages.push(user_message);
+        // Add user message to conversation history
+        let user_message = ChatCompletionRequestUserMessageArgs::default()
+            .content(user_input)
+            .build()?
+            .into();
         
-        // Send message to API and stream the response
-        match send_message_streaming(&client, &config.model, &messages).await {
-            Ok(response) => {
-                // Add the assistant's response to conversation history
-                let assistant_message = create_assistant_message(&response)?;
-                messages.push(assistant_message);
+        conversation_history.push(user_message);
+        
+        // Create API request with conversation history
+        let request = CreateChatCompletionRequestArgs::default()
+            .model(&config.model)
+            .messages(conversation_history.clone())
+            .stream(true)
+            .build()
+            .context("Failed to build chat completion request")?;
+        
+        // Send request to OpenAI API and get streaming response
+        print!("AI> ");
+        io::stdout().flush().context("Failed to flush stdout")?;
+        
+        let mut stream = client.chat().create_stream(request).await.context("Failed to create stream")?;
+        
+        // Collect the full response to add to history
+        let mut full_response = String::new();
+        
+        // Process streaming response
+        while let Some(result) = stream.next().await {
+            match result {
+                Ok(response) => {
+                    response.choices.iter().for_each(|chat_choice| {
+                        if let Some(content) = &chat_choice.delta.content {
+                            print!("{}", content);
+                            io::stdout().flush().unwrap();
+                            full_response.push_str(content);
+                        }
+                    });
+                }
+                Err(err) => {
+                    eprintln!("\nError: {}", err);
+                    break;
+                }
             }
-            Err(e) => {
-                eprintln!("Error: {}", e);
-            }
+        }
+        
+        println!(); // Add newline after AI response
+        
+        // Add assistant's response to conversation history
+        if !full_response.is_empty() {
+            let assistant_message = ChatCompletionRequestAssistantMessageArgs::default()
+                .content(full_response)
+                .build()?
+                .into();
+            
+            conversation_history.push(assistant_message);
         }
     }
     
