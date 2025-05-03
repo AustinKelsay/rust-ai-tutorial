@@ -1,0 +1,21 @@
+[package]
+name = "cli-chat"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# Async runtime
+tokio = { version = "1.36", features = ["full"] }
+
+# OpenAI API client
+async-openai = "0.18"
+
+# Environment variables loading
+dotenv = "0.15"
+
+# Error handling
+anyhow = "1.0"
+
+# Futures and streams
+futures = "0.3"
+tokio-stream = "0.1"
