@@ -1,6 +1,17 @@
 use anyhow::{Context, Result};
-use async_openai::{Client, config::OpenAIConfig};
+use async_openai::{
+    Client, 
+    config::OpenAIConfig,
+    types::{
+        ChatCompletionRequestMessage, 
+        CreateChatCompletionRequestArgs,
+        Role,
+        ChatCompletionRequestSystemMessageArgs,
+        ChatCompletionRequestUserMessageArgs,
+    }
+};
 use dotenv::dotenv;
+use futures::StreamExt;
 use std::env;
 use std::io::{self, Write};
 
@@ -71,6 +82,72 @@ fn read_input(prompt: &str) -> Result<String> {
     Ok(input.trim().to_string())
 }
 
+/// Create a system message to initialize the conversation
+fn create_system_message() -> Result<ChatCompletionRequestMessage> {
+    let system_message = ChatCompletionRequestSystemMessageArgs::default()
+        .content("You are a helpful, friendly assistant. Provide clear and concise responses to help the user.")
+        .build()?;
+    
+    Ok(system_message.into())
+}
+
+/// Create a user message from input text
+fn create_user_message(content: &str) -> Result<ChatCompletionRequestMessage> {
+    let user_message = ChatCompletionRequestUserMessageArgs::default()
+        .content(content)
+        .build()?;
+    
+    Ok(user_message.into())
+}
+
+/// Send a message to the API and stream the response
+async fn send_message_streaming(
+    client: &Client<OpenAIConfig>,
+    model: &str,
+    messages: &[ChatCompletionRequestMessage],
+) -> Result<String> {
+    // Create the API request with streaming enabled
+    let request = CreateChatCompletionRequestArgs::default()
+        .model(model)
+        .messages(messages.to_vec())
+        .stream(true)
+        .build()?;
+    
+    // Send the request and get a stream of responses
+    let mut stream = client.chat().create_stream(request).await?;
+    
+    print!("AI> ");
+    io::stdout().flush().context("Failed to flush stdout")?;
+    
+    let mut full_response = String::new();
+    
+    // Process each chunk as it arrives
+    while let Some(result) = stream.next().await {
+        match result {
+            Ok(response) => {
+                // Extract content from the response delta
+                if let Some(delta) = response.choices.first() {
+                    if let Some(content) = &delta.delta.content {
+                        // Print the content fragment immediately
+                        print!("{}", content);
+                        io::stdout().flush().context("Failed to flush stdout")?;
+                        
+                        // Collect the complete response
+                        full_response.push_str(content);
+                    }
+                }
+            }
+            Err(e) => {
+                return Err(anyhow::anyhow!("Error receiving response: {}", e));
+            }
+        }
+    }
+    
+    println!(); // End the line after the complete response
+    
+    Ok(full_response)
+}
+
 #[tokio::main]
 async fn main() -> Result<()> {
     // Load configuration from environment variables
@@ -82,6 +159,9 @@ async fn main() -> Result<()> {
     
     // Display welcome message
     print_welcome_message(&config.model);
+    
+    // Initialize conversation history with a system message
+    let mut messages = vec![create_system_message()?];
     
     // Main interaction loop
     loop {
@@ -99,10 +179,25 @@ async fn main() -> Result<()> {
             continue;
         }
         
-        // Process the user input (for now, just echo it back)
-        println!("AI> You said: {}", user_input);
+        // Create a message from user input and add to history
+        let user_message = create_user_message(&user_input)?;
+        messages.push(user_message);
         
-        // In the future, we'll send this to the OpenAI API and display the response
+        // Send message to API and stream the response
+        match send_message_streaming(&client, &config.model, &messages).await {
+            Ok(response) => {
+                // Add the assistant's response to conversation history
+                let assistant_message = ChatCompletionRequestUserMessageArgs::default()
+                    .role(Role::Assistant)
+                    .content(response)
+                    .build()?;
+                
+                messages.push(assistant_message.into());
+            }
+            Err(e) => {
+                eprintln!("Error: {}", e);
+            }
+        }
     }
     
     Ok(())
